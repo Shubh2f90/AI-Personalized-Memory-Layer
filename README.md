@@ -23,6 +23,18 @@ re-explained instead of recalled).
 
 ## Architecture
 
+### System layers
+
+```mermaid
+flowchart TD
+    U[User] --> M[main.py - interface]
+    M --> E[chat_engine.py - logic]
+    E <--> L[Groq LLM - gpt-oss-20b]
+    E --> D[memory_db.py - storage]
+    D <--> S[(SQLite - memory.db)]
+```
+
+### Message flow
 ```
 User message
      │
