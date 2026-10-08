@@ -6,6 +6,7 @@ Run this file, talk to it, exit, run it again — it should remember
 facts from your previous session without you repeating yourself.
 """
 
+import os
 import memory_db as db
 import chat_engine as engine
 
@@ -13,6 +14,12 @@ TURN_COUNT_BEFORE_EXTRACTION = 3  # extract facts every N user turns
 
 
 def main():
+    """Run the chat loop: talk, extract facts every few turns, save on exit."""
+    if not os.environ.get("GROQ_API_KEY"):
+        print('GROQ_API_KEY is not set. In PowerShell run:')
+        print('  $env:GROQ_API_KEY="your-key"')
+        return
+
     db.init_db()
 
     print("=" * 50)
@@ -26,7 +33,10 @@ def main():
     turn_count = 0
 
     while True:
-        user_input = input("\nYou: ").strip()
+        try:
+            user_input = input("\nYou: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            user_input = "exit"
 
         if user_input.lower() in ("exit", "quit"):
             print("\nSaving memory before exit...")

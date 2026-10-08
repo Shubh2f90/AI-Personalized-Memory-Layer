@@ -16,10 +16,24 @@ import os
 from groq import Groq
 import memory_db as db
 
-# Reads your API key from the environment variable GROQ_API_KEY
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
 MODEL = "openai/gpt-oss-20b"
+
+_client = None
+
+
+def get_client():
+    """Create the Groq client on first use. Reads GROQ_API_KEY from the
+    environment (never hardcoded) and fails with a clear message if missing."""
+    global _client
+    if _client is None:
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                'GROQ_API_KEY is not set. In PowerShell run: '
+                '$env:GROQ_API_KEY="your-key"'
+            )
+        _client = Groq(api_key=api_key)
+    return _client
 
 
 def build_system_prompt():
@@ -39,23 +53,33 @@ def build_system_prompt():
 
 
 def get_response(user_message: str) -> str:
+    """Send the user's message to the LLM with stored facts and recent history.
+
+    Uses reasoning_effort="low" and a larger max_tokens because gpt-oss-20b is
+    a reasoning model: with a small budget it can spend every token thinking
+    and return an empty string. Error and empty replies are shown to the user
+    but never saved, so they can't pollute future context.
+    """
     db.save_message("user", user_message)
 
     system_prompt = build_system_prompt()
     history = db.get_recent_messages(limit=10)
 
     try:
-        response = client.chat.completions.create(
+        response = get_client().chat.completions.create(
             model=MODEL,
             messages=[{"role": "system", "content": system_prompt}] + history,
-            max_tokens=1000
+            max_tokens=2000,
+            reasoning_effort="low"
         )
-        reply = response.choices[0].message.content
+        reply = (response.choices[0].message.content or "").strip()
     except Exception as e:
-        reply = f"[Error talking to the model: {e}]"
+        return f"[Error talking to the model: {e}]"
+
+    if not reply:
+        return "[The model returned an empty reply. Please try again.]"
 
     db.save_message("assistant", reply)
-
     return reply
 
 
@@ -93,21 +117,23 @@ storing, reply with exactly: NONE
 """
 
     try:
-        response = client.chat.completions.create(
+        response = get_client().chat.completions.create(
             model=MODEL,
             messages=[{"role": "user", "content": extraction_prompt}],
             max_tokens=600,
             reasoning_effort="low"
         )
-        result = response.choices[0].message.content.strip()
+        result = (response.choices[0].message.content or "").strip()
     except Exception as e:
         print(f"[Fact extraction failed: {e}]")
         return
 
-    if result == "NONE" or not result:
+    if not result or result.upper() == "NONE":
         return
 
-    new_facts = [line.strip("- ").strip() for line in result.split("\n") if line.strip()]
+    known = {f.lower() for f in existing_facts}
+    new_facts = [line.lstrip("-*• ").strip() for line in result.split("\n") if line.strip()]
     for fact in new_facts:
-        db.save_fact(fact)
-        
+        if fact and fact.lower() not in known:
+            db.save_fact(fact)
+            known.add(fact.lower())
